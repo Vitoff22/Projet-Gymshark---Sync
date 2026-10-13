@@ -1,10 +1,10 @@
 import 'dotenv/config';
 import express from 'express';
-import cors from 'cors';
 import swaggerUi from 'swagger-ui-express';
 import logger from './logger.js';
 import chatRoutes from './routes/chat.js';
 import { swaggerSpec } from './config/swagger.js';
+import { localRequestGuard, createSessionMiddleware, createRateLimit, safeErrorHandler } from './config/security.js';
 
 /* ============================================================
    POINT D'ENTREE DU SERVEUR EXPRESS
@@ -21,8 +21,13 @@ const parsedPort = Number(process.env.PORT);
 const PORT = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 3000;
 
 // Ordre des middlewares important : CORS → JSON parser → logger HTTP.
-app.use(cors());
-app.use(express.json());
+app.disable('x-powered-by');
+app.set('trust proxy', false);
+app.use(localRequestGuard);
+app.use('/api', createRateLimit());
+app.use(express.json({ limit: '16kb', strict: true }));
+app.use('/api', createSessionMiddleware());
+app.get('/api/session', (req, res) => res.json({ ok: true }));
 app.use(logger.morganMiddleware());
 
 const docsSpec = {
@@ -38,9 +43,10 @@ app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(docsSpec, { explorer: true
 
 // Montage des routes API.
 app.use(chatRoutes);
+app.use(safeErrorHandler);
 
 // Demarrage du serveur.
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, '127.0.0.1', () => {
     logger.systemStart(`Serveur demarre sur :${PORT}`);
 });
 

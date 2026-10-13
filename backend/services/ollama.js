@@ -260,7 +260,7 @@ async function readNodeStream(body, decoder, timeout, signal, onLine) {
  * Supporte les deux modes de stream : Web Streams API (Node 18+) et node-fetch.
  * Retourne le texte complet assemble une fois le flux termine.
  */
-async function generateOllamaResponse(prompt, { onChunk, timeoutMs } = {}) {
+async function generateOllamaResponse(prompt, { onChunk, timeoutMs, signal } = {}) {
     const resolvedFetch = await ensureFetch();
     if (resolvedFetch == null) {
         throw new Error('No fetch implementation available');
@@ -272,19 +272,22 @@ async function generateOllamaResponse(prompt, { onChunk, timeoutMs } = {}) {
 
     logger.systemInfo(`Requete Ollama → ${MODEL}`);
 
-    const res = await resolvedFetch(API_URL, {
+    let res;
+    try {
+    res = await resolvedFetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream, text/plain, application/json' },
         body: JSON.stringify(payload),
-        signal: timeout.signal,
+        signal: signal ? AbortSignal.any([timeout.signal, signal]) : timeout.signal,
     });
+    } catch (error) { timeout.clear(); throw error; }
 
     if (!res.ok) {
         timeout.clear();
-        const txt = await res.text().catch(() => '');
-        const err = new Error(`Ollama HTTP error: ${res.status} ${res.statusText} - ${txt}`);
+        await res.body?.cancel?.().catch(() => {});
+        const err = new Error(`Ollama HTTP error: ${res.status} ${res.statusText}`);
         err.status = res.status;
-        logger.fatal(`Ollama HTTP ${res.status}: ${txt.slice(0, 100)}`, 'services/ollama.js');
+        logger.fatal(`Ollama HTTP ${res.status}`, 'services/ollama.js');
         throw err;
     }
 

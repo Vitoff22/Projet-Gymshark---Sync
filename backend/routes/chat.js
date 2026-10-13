@@ -1,275 +1,99 @@
 import express from 'express';
+import { randomUUID } from 'node:crypto';
 import { generateResponse, getHealth } from '../services/llm.js';
 import { getConversation, saveConversation, deleteConversation, listConversations } from '../services/history.js';
 import logger from '../logger.js';
 
 const router = express.Router();
+const active = new Set();
+const validId = id => typeof id === 'string' && /^conv_[a-zA-Z0-9_-]{1,80}$/.test(id);
+const publicConversation = ({ ownerId, ...conversation }) => conversation;
 
-const MAX_HISTORY_TURNS = 8;
-const MESSAGE_PREVIEW_MAX_LENGTH = 50;
-const TEST_STREAM_TIMEOUT_MS = 15000;
+// Even if mounted elsewhere, routes require the server's session middleware.
+router.use('/api', (req, res, next) => {
+    if (!req.ownerId) return res.status(401).json({ error: 'Session required' });
+    next();
+});
 
-/* ============================================================
-   FONCTIONS UTILITAIRES
-   ============================================================ */
-
-/**
- * Construit le prompt envoye au LLM en concatenant l'historique et le message utilisateur.
- */
-function buildPromptFromHistory(history, userMessage) {
-    const lines = [];
-
-    for (const entry of history) {
-        if (entry == null || entry.content === undefined) continue;
-        const speaker = entry.role === 'assistant' ? 'Assistant' : 'Utilisateur';
-        lines.push(`${speaker}: ${entry.content}`);
-    }
-
-    lines.push(`Utilisateur: ${userMessage}`);
-    lines.push('Assistant:');
-    return lines.join('\n');
-}
-
-/**
- * Tronque l'historique pour ne garder que les N derniers tours.
- */
-function trimHistory(history) {
-    const maxMessages = MAX_HISTORY_TURNS * 2;
-    if (history.length <= maxMessages) return history;
-    return history.slice(history.length - maxMessages);
-}
-
-/**
- * Configure les headers SSE (Server-Sent Events) sur la reponse.
- */
-function setupSSEHeaders(res) {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    if (res.flushHeaders) res.flushHeaders();
-}
-
-/**
- * Determine l'identifiant de conversation a utiliser.
- * Utilise celui recu du client s'il est valide, sinon en genere un nouveau.
- */
-function resolveConversationId(conversationId) {
-    if (typeof conversationId === 'string' && conversationId.trim() !== '') {
-        return conversationId.trim();
-    }
-    return `conv_${Date.now()}`;
-}
-
-/**
- * Charge l'historique complet d'une conversation depuis le fichier.
- * Retourne un tableau vide si la conversation n'existe pas encore.
- */
-async function loadConversationHistory(convId) {
-    const saved = await getConversation(convId);
-    if (saved == null) {
-        return [];
-    }
-    return saved.messages;
-}
-
-/**
- * Ajoute le message utilisateur et la reponse assistant a l'historique, puis sauvegarde.
- */
-async function saveUpdatedHistory(convId, history, userMessage, assistantReply) {
-    const nextHistory = history.slice();
-    nextHistory.push({ role: 'user', content: userMessage });
-    nextHistory.push({ role: 'assistant', content: assistantReply.trim() });
-    await saveConversation(convId, nextHistory);
-}
-
-/* ============================================================
-   ROUTES API
-   ============================================================ */
-
-/**
- * POST /api/chat
- * Recoit { message, conversationId } et streame la reponse du LLM via SSE.
- */
-router.post('/api/chat', async (req, res) => {
-    // Extraire le corps de la requete en securite.
-    const body = req.body;
-    let message;
-    let conversationId;
-    if (body != null) {
-        message = body.message;
-        conversationId = body.conversationId;
-    }
-
-    // Construire un apercu du message pour les logs (sans exposer le contenu complet).
-    let messagePreview = '';
-    if (message != null) {
-        messagePreview = String(message).slice(0, MESSAGE_PREVIEW_MAX_LENGTH);
-    }
-    logger.info(`Message recu: ${messagePreview}`);
-
-    if (message == null || message === '') {
-        return res.status(400).json({ error: 'Missing message' });
-    }
-
-    const convId = resolveConversationId(conversationId);
-    const history = await loadConversationHistory(convId);
-    const trimmedHistory = trimHistory(history);
-    const prompt = buildPromptFromHistory(trimmedHistory, message);
-
-    // Timeout d'inactivite configurable via variable d'environnement.
-    const envTimeout = Number(process.env.OLLAMA_TIMEOUT);
-    let timeoutMs;
-    if (Number.isFinite(envTimeout) && envTimeout > 0) {
-        timeoutMs = envTimeout;
-    }
-
-    setupSSEHeaders(res);
-
-    // Envoyer l'identifiant de conversation au client en premier evenement.
-    res.write(`data: ${JSON.stringify({ type: 'meta', conversationId: convId })}\n\n`);
-    logger.systemInfo('En attente de reponse LLM...');
-
-    // `isFinished` protege contre les doubles terminaisons du flux SSE.
-    let isFinished = false;
-    let assistantReply = '';
-    let chunkCount = 0;
-
+async function streamChat(req, res) {
+    const { message, conversationId } = req.body || {};
+    if (typeof message !== 'string' || !message.trim()) return res.status(400).json({ error: 'Missing message' });
+    if (message.length > 8000) return res.status(413).json({ error: 'Message too long (8000 characters maximum)' });
+    if (conversationId != null && !validId(conversationId)) return res.status(400).json({ error: 'Invalid conversation ID' });
+    if (active.has(req.ownerId) || active.size >= 2) return res.status(429).json({ error: 'Generation already in progress; retry later' });
+    active.add(req.ownerId);
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), 120000);
+    const onClose = () => controller.abort();
+    res.once('close', onClose);
     try {
-        await generateResponse(prompt, {
-            timeoutMs,
-            onChunk: (chunk) => {
-                try {
-                    chunkCount++;
-                    if (chunk == null || chunk === '') return;
-                    assistantReply += chunk;
-                    const safe = chunk.replace(/\r?\n/g, '\\n');
-                    res.write(`data: ${safe}\n\n`);
-                } catch (e) {
-                    logger.warn(`Erreur chunk: ${e.message}`, 'routes/chat.js');
-                }
-            },
-            onReasoning: () => {
-                try {
-                    res.write(`data: ${JSON.stringify({ type: 'reasoning' })}\n\n`);
-                } catch (e) {
-                    logger.warn(`Erreur onReasoning: ${e.message}`, 'routes/chat.js');
-                }
-            },
-        });
-
-        logger.systemInfo(`Reponse LLM recue, chunks: ${chunkCount}`);
-
-        if (!isFinished) {
-            res.write('data: [DONE]\n\n');
-            isFinished = true;
+        const saved = conversationId ? await getConversation(conversationId, req.ownerId) : null;
+        if (conversationId && !saved) return res.status(404).json({ error: 'Conversation not found' });
+        if (!conversationId && (await listConversations(req.ownerId)).length >= 100) {
+            return res.status(409).json({ error: 'Conversation limit reached; delete an old conversation' });
         }
-
-        // Sauvegarder l'echange complet (user + assistant) dans l'historique.
-        await saveUpdatedHistory(convId, history, message, assistantReply);
-        res.end();
-
-    } catch (err) {
-        logger.fatal(`Error in /api/chat: ${err.message || err}`, 'routes/chat.js');
-
-        if (!isFinished) {
-            let errorMessage = 'LLM error';
-            if (err != null && err.message) {
-                errorMessage = err.message;
+        const convId = conversationId || `conv_${randomUUID()}`;
+        const history = saved?.messages || [];
+        const prompt = [...history.slice(-16).map(entry => `${entry.role === 'assistant' ? 'Assistant' : 'Utilisateur'}: ${entry.content}`),
+            `Utilisateur: ${message}`, 'Assistant:'].join('\n');
+        const configuredTimeout = Number(process.env.OLLAMA_TIMEOUT);
+        const timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? Math.min(configuredTimeout, 60000) : 60000;
+        res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'Connection': 'keep-alive' });
+        res.flushHeaders?.();
+        res.write(`data: ${JSON.stringify({ type: 'meta', conversationId: convId })}\n\n`);
+        let reply = '';
+        await generateResponse(prompt, { timeoutMs, signal: controller.signal,
+            onChunk(chunk) {
+                if (controller.signal.aborted || typeof chunk !== 'string') return;
+                if (reply.length + chunk.length > 64000) { controller.abort(); return; }
+                reply += chunk;
+                // JSON prevents model output from injecting SSE control/meta events.
+                res.write(`data: ${JSON.stringify({ response: chunk })}\n\n`);
+            },
+            onReasoning() {
+                if (!controller.signal.aborted) res.write('data: {"type":"reasoning"}\n\n');
             }
-            res.write(`event: error\ndata: ${JSON.stringify({ message: errorMessage })}\n\n`);
-            isFinished = true;
-        }
-
-        try {
-            res.end();
-        } catch (_e) {
-            // res.end() peut echouer si la connexion est deja fermee.
-        }
-    }
-});
-
-/**
- * GET /api/conversations
- * Retourne la liste de toutes les conversations sans leurs messages,
- * triees par date de mise a jour decroissante.
- */
-router.get('/api/conversations', async (req, res) => {
-    const conversations = await listConversations();
-    res.json(conversations);
-});
-
-/**
- * GET /api/conversations/:id
- * Retourne une conversation complete (avec messages) par son identifiant.
- */
-router.get('/api/conversations/:id', async (req, res) => {
-    const conv = await getConversation(req.params.id);
-    if (conv == null) {
-        return res.status(404).json({ error: 'Not found' });
-    }
-    res.json(conv);
-});
-
-/**
- * DELETE /api/conversations/:id
- * Supprime une conversation par son identifiant.
- */
-router.delete('/api/conversations/:id', async (req, res) => {
-    const deleted = await deleteConversation(req.params.id);
-    if (!deleted) {
-        return res.status(404).json({ error: 'Not found' });
-    }
-    res.json({ ok: true });
-});
-
-/**
- * GET /api/llm/health
- * Health check du serveur LLM. Retourne 200 si OK, 503 sinon.
- */
-router.get('/api/llm/health', async (req, res) => {
-    const health = await getHealth({ timeoutMs: 5000 });
-
-    if (!health.ok) {
-        let healthError = 'unknown';
-        if (health.error != null && health.error !== '') {
-            healthError = health.error;
-        }
-        logger.warn(`LLM health check failed: ${healthError}`, 'routes/chat.js');
-        return res.status(503).json(health);
-    }
-
-    logger.systemInfo('LLM health check OK');
-    return res.status(200).json(health);
-});
-
-/**
- * GET /api/test-stream
- * Route de test pour verifier que le streaming SSE fonctionne avec un prompt simple.
- */
-router.get('/api/test-stream', async (req, res) => {
-    logger.systemInfo('Debut du test streaming');
-    setupSSEHeaders(res);
-
-    let chunkCount = 0;
-    // Prompt court pour verifier rapidement la chaine complete de streaming.
-    const prompt = "Say hello in 5 words";
-
-    try {
-        await generateResponse(prompt, {
-            timeoutMs: TEST_STREAM_TIMEOUT_MS,
-            onChunk: (chunk) => {
-                chunkCount++;
-                res.write(`data: ${chunk}\n\n`);
-            },
         });
-        logger.systemInfo(`Streaming complete, totalChunks: ${chunkCount}`);
+        if (controller.signal.aborted) throw new Error('Generation stopped');
+        await saveConversation(convId, [...history, { role: 'user', content: message }, { role: 'assistant', content: reply.trim() }], undefined, req.ownerId);
         res.write('data: [DONE]\n\n');
         res.end();
-    } catch (err) {
-        logger.fatal(`Test streaming error: ${err.message}`, 'routes/chat.js');
-        res.write(`data: ERROR: ${err.message}\n\n`);
-        res.end();
+    } catch (error) {
+        logger.warn('Generation or conversation storage failed', 'routes/chat.js');
+        if (!res.destroyed) {
+            if (res.headersSent) {
+                res.write(`event: error\ndata: ${JSON.stringify({ message: 'LLM error: response unavailable; retry later' })}\n\n`);
+                res.end();
+            } else res.status(500).json({ error: 'Conversation unavailable' });
+        }
+    } finally {
+        clearTimeout(deadline);
+        res.off('close', onClose);
+        active.delete(req.ownerId);
     }
+}
+router.post('/api/chat', streamChat);
+router.get('/api/conversations', async (req, res) => res.json(await listConversations(req.ownerId)));
+router.get('/api/conversations/:id', async (req, res) => {
+    if (!validId(req.params.id)) return res.status(400).json({ error: 'Invalid conversation ID' });
+    const conversation = await getConversation(req.params.id, req.ownerId);
+    if (!conversation) return res.status(404).json({ error: 'Not found' });
+    res.json(publicConversation(conversation));
 });
-
+router.delete('/api/conversations/:id', async (req, res) => {
+    if (!validId(req.params.id)) return res.status(400).json({ error: 'Invalid conversation ID' });
+    if (active.has(req.ownerId)) return res.status(409).json({ error: 'Wait for the current generation to finish' });
+    if (!await deleteConversation(req.params.id, req.ownerId)) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true });
+});
+router.get('/api/llm/health', async (req, res) => {
+    const health = await getHealth({ timeoutMs: 5000 });
+    // Never disclose upstream responses, internal URLs or provider credentials.
+    res.status(health.ok ? 200 : 503).json({ ok: Boolean(health.ok), modelAvailable: Boolean(health.modelAvailable) });
+});
+router.get('/api/test-stream', (req, res) => {
+    if (process.env.ENABLE_TEST_STREAM !== 'true') return res.sendStatus(404);
+    req.body = { message: 'Say hello in 5 words' };
+    return streamChat(req, res);
+});
 export default router;

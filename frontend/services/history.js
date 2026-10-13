@@ -2,7 +2,7 @@
    HISTORIQUE DES CONVERSATIONS (sidebar)
    ============================================================ */
 
-import { API_BASE, dom, state } from '../constants/config.js';
+import { API_BASE, apiFetch, dom, state } from '../constants/config.js';
 import { showStatus, activateView, animateElementBatch, setConversationMode } from '../components/feedback.js';
 import {
     appendMessage,
@@ -31,7 +31,7 @@ function createHistoryDeleteButton(conversation) {
             if (!confirmed) return;
 
             try {
-                const response = await fetch(`${API_BASE}/api/conversations/${conversation.id}`, {
+                const response = await apiFetch(`${API_BASE}/api/conversations/${encodeURIComponent(conversation.id)}`, {
                     method: 'DELETE',
                 });
 
@@ -92,7 +92,7 @@ export async function refreshHistory() {
     if (!dom.historyList) return;
 
     try {
-        const response = await fetch(`${API_BASE}/api/conversations`);
+        const response = await apiFetch(`${API_BASE}/api/conversations`);
         if (!response.ok) return;
         const conversations = await response.json();
 
@@ -121,7 +121,7 @@ export async function loadConversation(id) {
     stopSpeechInput(true);
 
     try {
-        const response = await fetch(`${API_BASE}/api/conversations/${id}`);
+        const response = await apiFetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}`);
         if (!response.ok) return;
         const conversation = await response.json();
         const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];

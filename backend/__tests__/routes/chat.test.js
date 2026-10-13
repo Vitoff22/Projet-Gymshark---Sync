@@ -45,6 +45,7 @@ beforeAll(async () => {
 
     const app = express();
     app.use(express.json());
+    app.use((req, res, next) => { req.ownerId = 'test-owner'; next(); });
     app.use(chatRouter);
     await new Promise((resolve) => {
         server = http.createServer(app);
@@ -124,7 +125,7 @@ describe('POST /api/chat', () => {
         const response = await postChat({ message: 'Bonjour' });
 
         expect(response.headers.get('content-type')).toContain('text/event-stream');
-        expect(response.headers.get('cache-control')).toBe('no-cache');
+        expect(response.headers.get('cache-control')).toBe('no-store');
         await response.text();
     });
 
@@ -133,17 +134,17 @@ describe('POST /api/chat', () => {
         const text = await response.text();
         const convId = extractConversationId(text);
 
-        expect(convId).toMatch(/^conv_\d+$/);
+        expect(convId).toMatch(/^conv_[a-f0-9-]{36}$/);
     });
 
     test('doit utiliser l\'ID de conversation fourni par le client', async () => {
-        historyMock.getConversation.mockReturnValue({ id: 'mon_id', messages: [] });
+        historyMock.getConversation.mockReturnValue({ id: 'conv_mon_id', messages: [] });
 
-        const response = await postChat({ message: 'Bonjour', conversationId: 'mon_id' });
+        const response = await postChat({ message: 'Bonjour', conversationId: 'conv_mon_id' });
         const text = await response.text();
         const convId = extractConversationId(text);
 
-        expect(convId).toBe('mon_id');
+        expect(convId).toBe('conv_mon_id');
     });
 
     test('doit envoyer [DONE] a la fin du stream', async () => {
@@ -160,7 +161,8 @@ describe('POST /api/chat', () => {
         const text = await response.text();
 
         expect(text).toContain('event: error');
-        expect(text).toContain('LLM indisponible');
+        expect(text).toContain('LLM error');
+        expect(text).not.toContain('LLM indisponible');
     });
 
 });
@@ -187,7 +189,7 @@ describe('GET /api/conversations/:id', () => {
     test('doit retourner 404 si la conversation n\'existe pas', async () => {
         historyMock.getConversation.mockReturnValue(null);
 
-        const response = await fetch(`${baseUrl}/api/conversations/inexistant`);
+        const response = await fetch(`${baseUrl}/api/conversations/conv_inexistant`);
 
         expect(response.status).toBe(404);
         await response.json();
@@ -211,7 +213,7 @@ describe('DELETE /api/conversations/:id', () => {
     test('doit retourner 404 si la conversation n\'existe pas', async () => {
         historyMock.deleteConversation.mockReturnValue(false);
 
-        const response = await fetch(`${baseUrl}/api/conversations/inexistant`, { method: 'DELETE' });
+        const response = await fetch(`${baseUrl}/api/conversations/conv_inexistant`, { method: 'DELETE' });
 
         expect(response.status).toBe(404);
         await response.json();

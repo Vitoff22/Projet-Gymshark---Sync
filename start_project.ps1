@@ -175,9 +175,9 @@ function Start-BackendIfNeeded {
         Write-Host '[INFO] Installation des dependances backend...'
         Push-Location $script:BackendDir
         try {
-            & cmd.exe /c 'npm install'
+            & cmd.exe /c 'npm ci --ignore-scripts'
             if ($LASTEXITCODE -ne 0) {
-                throw "[ERREUR] Echec de 'npm install'"
+                throw "[ERREUR] Echec de 'npm ci --ignore-scripts'"
             }
         }
         finally {
@@ -186,7 +186,13 @@ function Start-BackendIfNeeded {
     }
 
     Write-Host '[INFO] Demarrage du backend...'
-    Start-TrackedProcess -FilePath 'cmd.exe' -ArgumentList '/c', 'npm start' -WorkingDirectory $script:BackendDir -LogPrefix 'gymshark-backend' | Out-Null
+    $previousFrontendPort = $env:FRONTEND_PORT
+    $env:FRONTEND_PORT = [string]$FrontendPort
+    try {
+        Start-TrackedProcess -FilePath 'cmd.exe' -ArgumentList '/c', 'npm start' -WorkingDirectory $script:BackendDir -LogPrefix 'gymshark-backend' | Out-Null
+    } finally {
+        $env:FRONTEND_PORT = $previousFrontendPort
+    }
 
     Wait-Port -HostName '127.0.0.1' -Port $BackendPort -Label 'Backend' -TimeoutSeconds 20
 }
@@ -218,6 +224,8 @@ function Start-FrontendIfNeeded {
     $pythonArgs += '-m'
     $pythonArgs += 'http.server'
     $pythonArgs += "$FrontendPort"
+    $pythonArgs += "--bind"
+    $pythonArgs += "127.0.0.1"
 
     Write-Host '[INFO] Demarrage du serveur frontend...'
     Start-TrackedProcess -FilePath $pythonBinary -ArgumentList $pythonArgs -WorkingDirectory $script:FrontendDir -LogPrefix 'gymshark-frontend' | Out-Null

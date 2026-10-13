@@ -5,7 +5,7 @@ const swaggerDefinition = {
     info: {
         title: 'Gymshark Sync API',
         version: '1.0.0',
-        description: 'API REST et SSE du backend Gymshark Sync.',
+        description: 'API locale REST et SSE. Une session de navigateur isole les conversations. Ne pas exposer ce serveur directement sur Internet.',
     },
     tags: [
         { name: 'Chat', description: 'Chat en streaming SSE avec Ollama' },
@@ -64,15 +64,8 @@ const swaggerDefinition = {
                 type: 'object',
                 properties: {
                     ok: { type: 'boolean' },
-                    url: { type: 'string' },
-                    model: { type: 'string' },
+
                     modelAvailable: { type: 'boolean' },
-                    models: {
-                        type: 'array',
-                        items: { type: 'string' },
-                    },
-                    error: { type: 'string' },
-                    details: { type: 'string' },
                 },
             },
         },
@@ -226,7 +219,7 @@ const swaggerDefinition = {
         '/api/test-stream': {
             get: {
                 tags: ['Chat'],
-                summary: 'Route de test du streaming SSE',
+                summary: 'Test SSE local, désactivé sauf ENABLE_TEST_STREAM=true',
                 responses: {
                     200: {
                         description: 'Flux SSE de test',

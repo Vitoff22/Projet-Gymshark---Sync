@@ -231,7 +231,7 @@ async function streamResponseBody(res, decoder, timeout, onLine) {
     }
 }
 
-export async function generateOpenCodeResponse(prompt, { onChunk, onReasoning, timeoutMs } = {}) {
+export async function generateOpenCodeResponse(prompt, { onChunk, onReasoning, timeoutMs, signal } = {}) {
     const resolvedFetch = await ensureFetch();
     if (resolvedFetch == null) {
         throw new Error('No fetch implementation available. Install node-fetch or run on Node 18+');
@@ -246,7 +246,9 @@ export async function generateOpenCodeResponse(prompt, { onChunk, onReasoning, t
 
     logger.systemInfo(`Requete OpenCode → ${MODEL}`);
 
-    const res = await resolvedFetch(CHAT_URL, {
+    let res;
+    try {
+    res = await resolvedFetch(CHAT_URL, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -254,15 +256,16 @@ export async function generateOpenCodeResponse(prompt, { onChunk, onReasoning, t
             Authorization: `Bearer ${API_KEY}`,
         },
         body: JSON.stringify(buildChatPayload(prompt)),
-        signal: timeout.signal,
+        signal: signal ? AbortSignal.any([timeout.signal, signal]) : timeout.signal,
     });
+    } catch (error) { timeout.clear(); throw error; }
 
     if (!res.ok) {
         timeout.clear();
-        const txt = await res.text().catch(() => '');
-        const err = new Error(`OpenCode API error: ${res.status} ${res.statusText} - ${txt}`);
+        await res.body?.cancel?.().catch(() => {});
+        const err = new Error(`OpenCode API error: ${res.status} ${res.statusText}`);
         err.status = res.status;
-        logger.fatal(`OpenCode HTTP ${res.status}: ${txt.slice(0, 100)}`, 'services/opencode.js');
+        logger.fatal(`OpenCode HTTP ${res.status}`, 'services/opencode.js');
         throw err;
     }
 

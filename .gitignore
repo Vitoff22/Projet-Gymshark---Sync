@@ -10,7 +10,7 @@ node_modules/
 npm-debug.log*
 
 # Data / generated
-data/conversations.json
+data/
 rapport.json
 
 # OS files

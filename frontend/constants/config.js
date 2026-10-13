@@ -3,7 +3,18 @@
    ============================================================ */
 
 /** URL de base du backend Express. */
-export const API_BASE = 'http://localhost:3000';
+export const API_BASE = `http://${location.hostname === '127.0.0.1' ? '127.0.0.1' : 'localhost'}:3000`;
+
+let sessionReady;
+export async function apiFetch(url, options = {}) {
+    if (!sessionReady) {
+        sessionReady = fetch(`${API_BASE}/api/session`, { credentials: 'include' })
+            .then(response => { if (!response.ok) throw new Error('Session unavailable'); })
+            .catch(error => { sessionReady = null; throw error; });
+    }
+    await sessionReady;
+    return fetch(url, { ...options, credentials: 'include' });
+}
 
 /**
  * Cles de stockage utilisees par le frontend.

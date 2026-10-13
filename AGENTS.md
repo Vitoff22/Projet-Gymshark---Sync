@@ -16,8 +16,8 @@ Backend depends on a **running Ollama instance** (default `http://localhost:1143
 
 Manual:
 ```bash
-cd backend && cp .env.example .env && npm install && npm start   # → :3000
-cd frontend && python3 -m http.server 8080                       # → :8080
+cd backend && cp .env.example .env && npm ci --ignore-scripts && npm start   # → :3000
+cd frontend && python3 -m http.server 8080 --bind 127.0.0.1                       # → :8080
 ```
 
 ## Environment
@@ -34,7 +34,7 @@ Copy `backend/.env.example` to `backend/.env` before first run. `.env` is gitign
 | `OPENCODE_API_URL` | `https://opencode.ai/zen/go/v1` | OpenCode API base URL |
 | `OPENCODE_MAX_TOKENS` | `4096` | Max tokens per response |
 | `OPENCODE_TEMPERATURE` | `0.6` | Model temperature (0.0–2.0) |
-| `OLLAMA_TIMEOUT` | `60000` | Inactivity timeout (ms, empty = disabled) |
+| `OLLAMA_TIMEOUT` | `60000` | Inactivity timeout (ms, empty = 60000, maximum 60000) |
 | `PORT` | `3000` | HTTP server port |
 
 ## Commands
@@ -43,7 +43,7 @@ Copy `backend/.env.example` to `backend/.env` before first run. `.env` is gitign
 cd backend && npm test
 ```
 
-Tests use Node 18+ native `fetch`. All test files live under `backend/__tests__/`.
+Tests use Node 22+ native `fetch`. All test files live under `backend/__tests__/`.
 
 ## Architecture notes
 
@@ -63,6 +63,10 @@ Tests use Node 18+ native `fetch`. All test files live under `backend/__tests__/
 - **Module-level state reset**: any test that relies on module-level variables (e.g. the prompt cache in `config/prompt.js`) MUST use `jest.resetModules()` followed by a fresh dynamic `import()` — the `freshImport()` utility in tests is the canonical pattern.
 - Route tests (`chat.test.js`) spin up a real Express server on port 0 (OS-assigned) — no supertest needed.
 
-## Package manager ambiguity
+## Package manager
 
-`backend/` contains both `package-lock.json` (npm) and `pnpm-lock.yaml` (pnpm). The `start_project.sh` script uses `npm install`. Prefer `npm` for consistency unless the team has standardized on pnpm.
+`npm` is the sole supported package manager. `backend/package-lock.json` is the only tracked lockfile. Install with `npm ci --ignore-scripts`; do not create a parallel pnpm/yarn lockfile. Serve `frontend/` over local HTTP, never `file://`, because null origins are intentionally rejected.
+
+## Security boundaries
+
+The demo binds to loopback only. See README Security for browser session ownership, legacy history handling, quotas and deployment limits. Never remove owner checks, broad-enable CORS, expose `data/`, or log prompts/provider responses. Run `npm test` and `npm audit` after security changes. Frontend modules are ESM.

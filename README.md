@@ -57,7 +57,7 @@ Ce guide couvre:
 
 ## Prérequis
 
-- **Node.js** >= 18 (pour le `fetch` natif) ou Node.js >= 14 avec `node-fetch` installé
+- **Node.js** >= 22 (version maintenue, avec `fetch` natif)
 - **Ollama** installé et fonctionnel ([ollama.com](https://ollama.com))
 
 ## Installation et lancement
@@ -79,7 +79,7 @@ ollama pull llama3
 cd backend
 
 # Installer les dépendances
-npm install
+npm ci --ignore-scripts
 
 # Copier et adapter le fichier d'environnement
 cp .env.example .env
@@ -98,12 +98,12 @@ npm start
 
 ### 4. Ouvrir le frontend
 
-Ouvrir le fichier `frontend/index.html` directement dans un navigateur, ou utiliser un serveur local :
+Servir le dossier `frontend/` en HTTP local, puis ouvrir `http://localhost:8080`. L’ouverture directe de `index.html` via `file://` n’est pas prise en charge : les origines `null` sont volontairement refusées par le backend.
 
 ```bash
 # Exemple avec Python
 cd frontend
-python3 -m http.server 8080
+python3 -m http.server 8080 --bind 127.0.0.1
 # Puis ouvrir http://localhost:8080
 ```
 
@@ -184,3 +184,18 @@ Le `conversationId` est optionnel. S'il est omis, un nouvel ID est généré aut
 - **Effets visuels** : Spotlight suivant le curseur, animations d'entrée, effets ripple, halos
 - **Design responsive** : Adapté aux écrans de bureau et mobiles
 - **Accessibilité** : Support `prefers-reduced-motion`, `aria-label`, `focus-visible`
+
+
+## Sécurité et limites du démonstrateur
+
+Ce projet est un **démonstrateur local**, pas un service public avec comptes utilisateurs. Le frontend attend le backend sur le port `3000` ; conserver ce port (modifier `PORT` / `BACKEND_PORT` seul ne reconfigure pas le frontend ni sa CSP). Un autre port frontend est possible avec `-FrontendPort` sous PowerShell, ou `FRONTEND_PORT` sous Bash. Le backend et le serveur frontend de lancement écoutent uniquement sur `127.0.0.1`. Les contrôles Host et Origin rejettent les sites tiers (y compris les origines `null`). Ne pas exposer ces ports via un tunnel ou un proxy public : il faudrait d'abord une authentification, HTTPS, des quotas par compte et un stockage adapté.
+
+L'historique est désormais propre au navigateur : un cookie signé `HttpOnly`, `SameSite=Strict`, valable 30 jours, identifie chaque session. Le cookie est envoyé avec les requêtes du frontend, et chaque lecture, modification et suppression vérifie le propriétaire. La clé de signature locale est dans `data/session.key`, ignorée par Git. Le dossier `data/` contient des informations privées et ne doit jamais être servi comme dossier web ou envoyé sur GitHub. La suppression du cookie ou de cette clé rend les conversations correspondantes inaccessibles depuis l'interface.
+
+Les conversations créées avant cette protection restent conservées dans `data/conversations.json`, sans être attribuées arbitrairement au premier visiteur. Elles ne sont plus accessibles dans l'interface ; démarrer une **nouvelle conversation** si un ancien identifiant provoque une erreur. Une reprise des anciens échanges demande une migration locale explicite après identification de leur propriétaire.
+
+Protections appliquées : corps JSON limité à 16 Kio, message limité à 8 000 caractères, 60 requêtes API par minute pour ce processus local, deux générations simultanées maximum et une par navigateur, délai total de 120 secondes, réponse limitée à 64 000 caractères, arrêt de la génération après déconnexion. Le stockage conserve les 200 derniers messages par conversation, au maximum 100 conversations par navigateur, 1 000 au total et 20 Mio de fichier. Une seule instance du backend doit utiliser ce dossier de données. Les écritures sont sérialisées et remplacent le fichier atomiquement ; un fichier corrompu n'est jamais réinitialisé silencieusement.
+
+Les erreurs fournisseur ne sont pas exposées au navigateur. Les réponses Markdown échappent le HTML et n'autorisent que des liens HTTP(S), sans chargement automatique des images distantes. Une politique CSP restreint les scripts et les connexions. Les polices et icônes restent des ressources externes Google Fonts/CDNJS. Le formulaire de documentation Swagger fonctionne en local. `/api/test-stream` est désactivé par défaut ; `ENABLE_TEST_STREAM=true` l'active avec les mêmes limites de génération.
+
+Gestionnaire pris en charge : **npm uniquement**, avec `backend/package-lock.json` comme fichier de verrouillage de référence. Installation reproductible : `cd backend`, puis `npm ci --ignore-scripts`. Vérifications : `npm test` et `npm audit`. Les tests couvrent notamment l'isolation entre navigateurs, les cookies falsifiés, les origines interdites, les limites, la déconnexion et le rendu Markdown. L'override `js-yaml` est limité au chargeur de configuration NYC de Jest ; son API `load` reste compatible et évite l'ancienne dépendance `sprintf-js` vulnérable.

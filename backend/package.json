@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "chalk": "^4.1.2",
-    "cors": "^2.8.6",
     "dotenv": "^17.4.0",
     "express": "^5.2.1",
     "morgan": "^1.10.1",
@@ -21,5 +20,13 @@
   },
   "devDependencies": {
     "jest": "^30.3.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "overrides": {
+    "@istanbuljs/load-nyc-config": {
+      "js-yaml": "^4.3.0"
+    }
   }
 }

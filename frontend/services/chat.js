@@ -2,7 +2,7 @@
    TRANSPORT SSE (streaming de la reponse assistant)
    ============================================================ */
 
-import { API_BASE, dom, state } from '../constants/config.js';
+import { API_BASE, apiFetch, dom, state } from '../constants/config.js';
 import { showStatus, setConversationMode } from '../components/feedback.js';
 import { getActiveInput } from '../components/input.js';
 import { syncAllInputs } from '../components/input-sync.js';
@@ -153,7 +153,7 @@ export async function sendAndStream(message, successStatus) {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/api/chat`, {
+        const response = await apiFetch(`${API_BASE}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

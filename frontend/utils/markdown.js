@@ -55,29 +55,31 @@ function autoFormatInlineText(text) {
 }
 
 function renderInlineMarkdown(text) {
-    let html = escapeHtml(autoFormatInlineText(text));
-    const codeTokens = [];
-
-    html = html.replace(/`([^`\n]+)`/g, (_, code) => {
-        const token = `%%CODE_TOKEN_${codeTokens.length}%%`;
-        codeTokens.push(`<code>${code}</code>`);
-        return token;
+    const tokens = [];
+    const token = html => {
+        tokens.push(html);
+        return `ZZSAFETOKEN${tokens.length - 1}ZZ`;
+    };
+    // Parse links before HTML/formatting, validate the raw URL, then escape both
+    // attributes and label. Never load remote images supplied by model output.
+    let source = autoFormatInlineText(text).replace(/`([^`\n]+)`/g,
+        (_, code) => token(`<code>${escapeHtml(code)}</code>`));
+    source = source.replace(/!?\[([^\]]*)\]\(([^)]+)\)/g, (_, label, target) => {
+        try {
+            const raw = target.trim();
+            if (!/^https?:\/\//i.test(raw) || /[\u0000-\u0020\u007f]/.test(raw)) return label;
+            const url = new URL(raw);
+            if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return label;
+            return token(`<a href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label || 'Voir le lien')}</a>`);
+        } catch { return label; }
     });
-
-    html = html
+    let html = escapeHtml(source)
         .replace(/\*\*([^\n*][\s\S]*?)\*\*/g, '<strong>$1</strong>')
         .replace(/__([^\n_][\s\S]*?)__/g, '<strong>$1</strong>')
         .replace(/\*(?!\s)([^*\n]+?)\*/g, '<em>$1</em>')
         .replace(/_(?!\s)([^_\n]+?)_/g, '<em>$1</em>')
-        .replace(/~~([^\n~]+?)~~/g, '<del>$1</del>')
-        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-        .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">');
-
-    for (const [index, snippet] of codeTokens.entries()) {
-        html = html.replace(`%%CODE_TOKEN_${index}%%`, snippet);
-    }
-
-    return html;
+        .replace(/~~([^\n~]+?)~~/g, '<del>$1</del>');
+    return html.replace(/ZZSAFETOKEN([0-9]+)ZZ/g, (match, index) => tokens[Number(index)] || match);
 }
 
 function getListItemDescriptor(line) {

@@ -125,14 +125,14 @@ start_backend_if_needed() {
         echo "[INFO] Installation des dependances backend..."
         (
             cd "$BACKEND_DIR"
-            npm install
+            npm ci --ignore-scripts
         )
     fi
 
     echo "[INFO] Demarrage du backend..."
     (
         cd "$BACKEND_DIR"
-        npm start
+        FRONTEND_PORT="$FRONTEND_PORT" npm start
     ) &
     local backend_pid=$!
     STARTED_PIDS+=("$backend_pid")
@@ -155,7 +155,7 @@ start_frontend_if_needed() {
     echo "[INFO] Demarrage du serveur frontend..."
     (
         cd "$FRONTEND_DIR"
-        python3 -m http.server "$FRONTEND_PORT"
+        python3 -m http.server "$FRONTEND_PORT" --bind 127.0.0.1
     ) &
     local frontend_pid=$!
     STARTED_PIDS+=("$frontend_pid")
